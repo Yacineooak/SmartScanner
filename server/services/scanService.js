@@ -1,130 +1,115 @@
-import { v4 as uuidv4 } from 'uuid';
+import net from 'net';
+import { promisify } from 'util';
+import { exec } from 'child_process';
+import { searchVulnerabilities } from './nvdService.js';
 
-// Common services and port ranges
-const commonPorts = {
-  20: { service: 'FTP-data', protocol: 'tcp' },
-  21: { service: 'FTP', protocol: 'tcp' },
-  22: { service: 'SSH', protocol: 'tcp' },
-  23: { service: 'Telnet', protocol: 'tcp' },
-  25: { service: 'SMTP', protocol: 'tcp' },
-  53: { service: 'DNS', protocol: 'tcp/udp' },
-  80: { service: 'HTTP', protocol: 'tcp' },
-  110: { service: 'POP3', protocol: 'tcp' },
-  143: { service: 'IMAP', protocol: 'tcp' },
-  443: { service: 'HTTPS', protocol: 'tcp' },
-  465: { service: 'SMTPS', protocol: 'tcp' },
-  993: { service: 'IMAPS', protocol: 'tcp' },
-  995: { service: 'POP3S', protocol: 'tcp' },
-  3306: { service: 'MySQL', protocol: 'tcp' },
-  3389: { service: 'RDP', protocol: 'tcp' },
-  5432: { service: 'PostgreSQL', protocol: 'tcp' },
-  8080: { service: 'HTTP-Proxy', protocol: 'tcp' },
-  8443: { service: 'HTTPS-Alt', protocol: 'tcp' },
+const execAsync = promisify(exec);
+
+export const scanPort = async (host, port) => {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    const timeout = 1000;
+    
+    socket.setTimeout(timeout);
+    
+    socket.on('connect', () => {
+      let service = getCommonService(port);
+      socket.write('HEAD / HTTP/1.0\r\n\r\n');
+      
+      socket.once('data', (data) => {
+        const banner = data.toString().split('\n')[0];
+        socket.destroy();
+        resolve({
+          port,
+          status: 'open',
+          service,
+          banner
+        });
+      });
+      
+      setTimeout(() => {
+        socket.destroy();
+        resolve({
+          port,
+          status: 'open',
+          service: getCommonService(port)
+        });
+      }, 200);
+    });
+    
+    socket.on('timeout', () => {
+      socket.destroy();
+      resolve({
+        port,
+        status: 'filtered'
+      });
+    });
+    
+    socket.on('error', () => {
+      socket.destroy();
+      resolve({
+        port,
+        status: 'closed'
+      });
+    });
+    
+    socket.connect(port, host);
+  });
 };
 
-// Function to simulate a TCP port scan
-export const simulateTcpScan = async (target, portRangeStr = '1-1000', options = {}) => {
-  // Parse port range
-  const portRange = parsePortRange(portRangeStr);
+const getCommonService = (port) => {
+  const services = {
+    20: 'FTP-data',
+    21: 'FTP',
+    22: 'SSH',
+    23: 'Telnet',
+    25: 'SMTP',
+    53: 'DNS',
+    80: 'HTTP',
+    110: 'POP3',
+    143: 'IMAP',
+    443: 'HTTPS',
+    3306: 'MySQL',
+    5432: 'PostgreSQL',
+    8080: 'HTTP-Proxy'
+  };
+  return services[port] || `port-${port}`;
+};
+
+export const scanTarget = async (target, portRange) => {
   const results = [];
+  const [startPort, endPort] = portRange.split('-').map(Number);
   
-  // Generate random OS and hostname if needed
-  const osInfo = simulateOsDetection();
-  
-  // Simulate scanning each port in the range
-  for (const port of portRange) {
-    // Randomly determine if port is open (20% chance)
-    const isOpen = Math.random() < 0.2;
-    
-    if (isOpen) {
-      const serviceInfo = commonPorts[port] || { 
-        service: `unknown-${port}`, 
-        protocol: 'tcp' 
-      };
-      
-      // Add CVE count for interesting services
-      let cveCount = 0;
-      if (['HTTP', 'SSH', 'FTP', 'SMB', 'RDP', 'HTTPS'].includes(serviceInfo.service)) {
-        cveCount = Math.floor(Math.random() * 5);
-      }
-      
-      results.push({
-        id: uuidv4(),
-        ip: target,
-        port,
-        protocol: serviceInfo.protocol,
-        service: serviceInfo.service,
-        status: 'open',
-        cveCount,
-        osInfo: port === 445 ? osInfo : undefined, // Include OS info for SMB port
-        timestamp: new Date().toISOString()
-      });
-    } else if (Math.random() < 0.3) {
-      // Some ports show as filtered
-      results.push({
-        id: uuidv4(),
-        ip: target,
-        port,
-        protocol: 'tcp',
-        status: 'filtered',
-        timestamp: new Date().toISOString()
-      });
+  for (let port = startPort; port <= endPort; port++) {
+    const result = await scanPort(target, port);
+    if (result.status !== 'closed') {
+      results.push(result);
     }
   }
   
-  // Delay to simulate real scanning time
-  await new Promise(resolve => setTimeout(resolve, 500 + Math.random() * 2000));
+  // Fetch vulnerabilities for detected services
+  for (const result of results) {
+    if (result.service) {
+      try {
+        const cpe = `cpe:2.3:a:*:${result.service.toLowerCase()}:*:*:*:*:*:*:*:*`;
+        const vulns = await searchVulnerabilities(cpe);
+        result.vulnerabilities = vulns;
+      } catch (error) {
+        console.error(`Failed to fetch vulnerabilities for ${result.service}:`, error);
+      }
+    }
+  }
   
   return results;
 };
 
-// Helper function to parse port range
-function parsePortRange(rangeStr) {
-  const ports = [];
-  
-  if (!rangeStr) {
-    // Default to first 1000 ports
-    for (let i = 1; i <= 1000; i++) {
-      ports.push(i);
-    }
-    return ports;
+export const detectOS = async (target) => {
+  try {
+    const { stdout } = await execAsync(`nmap -O ${target}`);
+    const osMatch = stdout.match(/OS details: (.+)/);
+    return osMatch ? osMatch[1] : 'Unknown';
+  } catch (error) {
+    console.error('OS detection failed:', error);
+    return 'Detection failed';
   }
-  
-  // Handle multiple formats: "80,443", "1-1000", "80,443,8000-8010"
-  const parts = rangeStr.split(',');
-  
-  for (const part of parts) {
-    if (part.includes('-')) {
-      // Handle range like "1-1000"
-      const [start, end] = part.split('-').map(p => parseInt(p.trim(), 10));
-      for (let i = start; i <= end; i++) {
-        ports.push(i);
-      }
-    } else {
-      // Handle single port like "80"
-      const port = parseInt(part.trim(), 10);
-      if (!isNaN(port)) {
-        ports.push(port);
-      }
-    }
-  }
-  
-  return [...new Set(ports)]; // Remove duplicates
-}
-
-// Function to simulate OS detection
-function simulateOsDetection() {
-  const osList = [
-    'Windows 10 Pro 21H2 (10.0 build 19044)',
-    'Windows Server 2019 Standard',
-    'Ubuntu 22.04.2 LTS (Jammy Jellyfish)',
-    'Debian GNU/Linux 11 (bullseye)',
-    'Red Hat Enterprise Linux 9.2',
-    'macOS 13.4 (Ventura)',
-    'FreeBSD 13.2-RELEASE',
-    'Alpine Linux 3.17.3',
-    'Cisco IOS 15.2(4)M7',
-  ];
-  
-  return osList[Math.floor(Math.random() * osList.length)];
-}
+};
