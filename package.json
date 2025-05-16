@@ -9,7 +9,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "server": "node server/index.js",
-    "dev:all": "concurrently \"npm run dev\" \"npm run server\""
+    "dev:all": "concurrently \"npm run dev\" \"npm run server\" \"python3 scanner/app.py\""
   },
   "dependencies": {
     "@radix-ui/react-alert-dialog": "^1.0.5",
@@ -28,9 +28,9 @@
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.2",
     "jspdf": "^2.5.1",
     "jspdf-autotable": "^3.8.1",
-    "jsonwebtoken": "^9.0.2",
     "lucide-react": "^0.344.0",
     "net": "^1.0.2",
     "node-nmap": "^4.0.0",

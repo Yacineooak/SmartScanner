@@ -1,71 +1,65 @@
-import { v4 as uuidv4 } from 'uuid';
+import jwt from 'jsonwebtoken';
+import User from '../models/User.js';
 
-// Mock token storage (use Redis or similar in production)
-const tokens = new Map();
-
-// Login handler
-export const login = (req, res) => {
-  const { email, password } = req.body;
-  
-  if (!email || !password) {
-    return res.status(400).json({ error: 'Email and password are required' });
-  }
-  
-  // In a real app, verify credentials against database
-  // For demo, accept any login with both email and password
-  
-  const userId = 'user-001';
-  const token = uuidv4();
-  
-  // Store token (in memory for demo)
-  tokens.set(token, { userId, email });
-  
-  // Return user info and token
-  res.status(200).json({
-    id: userId,
-    username: 'admin', // Hard-coded for demo
-    email,
-    token,
-    createdAt: new Date().toISOString(),
-  });
-};
-
-// Register handler
-export const register = (req, res) => {
-  const { username, email, password } = req.body;
-  
-  if (!username || !email || !password) {
-    return res.status(400).json({
-      error: 'Username, email, and password are required'
+export const register = async (req, res) => {
+  try {
+    const { username, email, password } = req.body;
+    
+    const user = await User.create({
+      username,
+      email,
+      password
     });
+
+    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
+      expiresIn: '24h'
+    });
+
+    res.status(201).json({
+      id: user.id,
+      username: user.username,
+      email: user.email,
+      token,
+      createdAt: user.createdAt
+    });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
   }
-  
-  // In a real app, check if user exists and create new user
-  // For demo, accept any registration
-  
-  const userId = uuidv4();
-  const token = uuidv4();
-  
-  // Store token (in memory for demo)
-  tokens.set(token, { userId, email });
-  
-  // Return user info and token
-  res.status(201).json({
-    id: userId,
-    username,
-    email,
-    token,
-    createdAt: new Date().toISOString(),
-  });
 };
 
-// Logout handler
-export const logout = (req, res) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  
-  if (token) {
-    tokens.delete(token);
+export const login = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    
+    const user = await User.findOne({ where: { email } });
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    const validPassword = await user.validatePassword(password);
+    if (!validPassword) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
+      expiresIn: '24h'
+    });
+
+    await user.update({ lastLogin: new Date() });
+
+    res.json({
+      id: user.id,
+      username: user.username,
+      email: user.email,
+      token,
+      createdAt: user.createdAt
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
-  
-  res.status(200).json({ message: 'Logged out successfully' });
+};
+
+export const logout = async (req, res) => {
+  // In a real implementation, you might want to blacklist the token
+  res.json({ message: 'Logged out successfully' });
 };

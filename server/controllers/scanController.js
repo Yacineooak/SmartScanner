@@ -1,174 +1,121 @@
-import { v4 as uuidv4 } from 'uuid';
-import { saveScan, getScan } from '../database/scanStore.js';
-import { simulateTcpScan } from '../services/scanService.js';
-import { fetchCveData } from '../services/cveService.js';
-import { generateAiInsights } from '../services/aiService.js';
+import Scan from '../models/Scan.js';
+import { scanTarget, detectOS } from '../services/scanService.js';
+import { searchVulnerabilities } from '../services/nvdService.js';
 
-// Common function to handle scan requests
-const handleScanRequest = async (req, res, scanType) => {
+export const startScan = async (req, res) => {
   try {
-    const { target, portRange, options } = req.body;
-    
-    if (!target) {
-      return res.status(400).json({ error: 'Target is required' });
-    }
-    
-    // Create a scan session
-    const scanId = uuidv4();
-    const scanSession = {
-      id: scanId,
-      userId: req.user?.id || 'anonymous',
+    const { target, portRange, scanType } = req.body;
+    const userId = req.user.id;
+
+    const scan = await Scan.create({
+      userId,
       scanType,
       target,
       portRange,
-      timestamp: new Date().toISOString(),
-      status: 'in-progress',
-    };
-    
-    // Save initial scan session
-    await saveScan(scanSession);
-    
+      status: 'in-progress'
+    });
+
     // Start scan process asynchronously
-    processScan(scanSession, options);
-    
-    // Return scan ID immediately
-    res.status(202).json({ 
-      scanId, 
+    processScan(scan);
+
+    res.status(202).json({
+      scanId: scan.id,
       message: `${scanType} scan started`,
       status: 'in-progress'
     });
   } catch (error) {
-    console.error(`Error starting ${scanType} scan:`, error);
-    res.status(500).json({ error: `Failed to start ${scanType} scan` });
+    res.status(500).json({ error: error.message });
   }
 };
 
-// Process scan in background
-const processScan = async (scanSession, options) => {
+const processScan = async (scan) => {
   try {
-    // Simulate scan based on type
     let results;
-    switch (scanSession.scanType) {
-      case 'tcp':
-      case 'udp':
-      case 'quick':
-      case 'syn':
+    
+    switch (scan.scanType) {
       case 'os':
-      case 'firewall':
-      case 'network':
-      case 'multi-ip':
-      case 'banner':
-        results = await simulateTcpScan(scanSession.target, scanSession.portRange, options);
+        results = await detectOS(scan.target);
         break;
       default:
-        results = [];
+        results = await scanTarget(scan.target, scan.portRange || '1-1000');
     }
-    
-    // Get CVE data for open ports/services
-    const cveDetails = {};
+
+    const vulnerabilities = {};
     for (const result of results) {
-      if (result.service && result.status === 'open') {
-        const cveData = await fetchCveData(result.service);
-        if (cveData && cveData.length > 0) {
-          cveDetails[result.id] = cveData;
+      if (result.service) {
+        const vulns = await searchVulnerabilities(result.service);
+        if (vulns.length > 0) {
+          vulnerabilities[result.port] = vulns;
         }
       }
     }
-    
-    // Generate AI insights if vulnerabilities found
-    let insights = null;
-    const vulnCount = Object.keys(cveDetails).length;
-    if (vulnCount > 0) {
-      insights = await generateAiInsights(results, cveDetails);
-    }
-    
-    // Update scan with results
-    const updatedScan = {
-      ...scanSession,
+
+    await scan.update({
       status: 'completed',
       results,
-      cveDetails,
-      insights,
-      completedAt: new Date().toISOString()
-    };
-    
-    await saveScan(updatedScan);
-  } catch (error) {
-    console.error(`Error processing scan ${scanSession.id}:`, error);
-    
-    // Update scan with error status
-    const failedScan = {
-      ...scanSession,
-      status: 'failed',
-      error: error.message,
-      completedAt: new Date().toISOString()
-    };
-    
-    await saveScan(failedScan);
-  }
-};
-
-// Controller methods for different scan types
-export const startTcpScan = (req, res) => handleScanRequest(req, res, 'tcp');
-export const startUdpScan = (req, res) => handleScanRequest(req, res, 'udp');
-export const startQuickScan = (req, res) => handleScanRequest(req, res, 'quick');
-export const startSynScan = (req, res) => handleScanRequest(req, res, 'syn');
-export const startOsScan = (req, res) => handleScanRequest(req, res, 'os');
-export const startFirewallScan = (req, res) => handleScanRequest(req, res, 'firewall');
-export const startNetworkScan = (req, res) => handleScanRequest(req, res, 'network');
-export const startMultiIpScan = (req, res) => handleScanRequest(req, res, 'multi-ip');
-export const startBannerScan = (req, res) => handleScanRequest(req, res, 'banner');
-
-// Get scan status
-export const getScanStatus = async (req, res) => {
-  try {
-    const { scanId } = req.params;
-    const scan = await getScan(scanId);
-    
-    if (!scan) {
-      return res.status(404).json({ error: 'Scan not found' });
-    }
-    
-    res.status(200).json({
-      scanId: scan.id,
-      status: scan.status,
-      progress: calculateProgress(scan),
-      startedAt: scan.timestamp,
-      completedAt: scan.completedAt
+      vulnerabilities,
+      endTime: new Date()
     });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to get scan status' });
+    console.error(`Error processing scan ${scan.id}:`, error);
+    await scan.update({
+      status: 'failed',
+      endTime: new Date()
+    });
   }
 };
 
-// Get scan results
-export const getScanResults = async (req, res) => {
+export const getScanStatus = async (req, res) => {
   try {
-    const { scanId } = req.params;
-    const scan = await getScan(scanId);
+    const scan = await Scan.findByPk(req.params.scanId);
     
     if (!scan) {
       return res.status(404).json({ error: 'Scan not found' });
     }
-    
-    res.status(200).json(scan);
+
+    if (scan.userId !== req.user.id) {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+
+    res.json({
+      id: scan.id,
+      status: scan.status,
+      startTime: scan.startTime,
+      endTime: scan.endTime
+    });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to get scan results' });
+    res.status(500).json({ error: error.message });
   }
 };
 
-// Helper function to calculate scan progress
-const calculateProgress = (scan) => {
-  if (scan.status === 'completed') return 100;
-  if (scan.status === 'failed') return 100;
-  
-  // For in-progress scans, estimate progress
-  const startTime = new Date(scan.timestamp).getTime();
-  const now = Date.now();
-  const elapsedMs = now - startTime;
-  
-  // Assume average scan takes 30 seconds
-  const estimatedProgress = Math.min(95, Math.floor((elapsedMs / 30000) * 100));
-  
-  return estimatedProgress;
+export const getScanResults = async (req, res) => {
+  try {
+    const scan = await Scan.findByPk(req.params.scanId);
+    
+    if (!scan) {
+      return res.status(404).json({ error: 'Scan not found' });
+    }
+
+    if (scan.userId !== req.user.id) {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+
+    res.json(scan);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const getScanHistory = async (req, res) => {
+  try {
+    const scans = await Scan.findAll({
+      where: { userId: req.user.id },
+      order: [['startTime', 'DESC']],
+      limit: 10
+    });
+
+    res.json(scans);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 };
