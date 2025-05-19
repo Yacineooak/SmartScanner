@@ -5,6 +5,8 @@ import { ArrowLeft, Download, Shield, AlertTriangle, Server, Network, FileJson }
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { ScanResult, CVEInfo, AIInsight } from '../types/scan';
 import GeoLocationCard from '../components/dashboard/GeoLocationCard';
+import { exportToPDF, exportToCSV, exportToJSON } from '../services/exportService';
+import { useToast } from '../hooks/useToast';
 
 interface ScanDetails {
   id: string;
@@ -22,6 +24,7 @@ const ScanResultsPage = () => {
   const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(true);
   const [scanDetails, setScanDetails] = useState<ScanDetails | null>(null);
+  const { toast } = useToast();
 
   useEffect(() => {
     // Simulate loading scan details
@@ -91,9 +94,34 @@ const ScanResultsPage = () => {
     loadScanDetails();
   }, [scanId]);
 
-  const handleExport = (format: 'pdf' | 'csv' | 'json') => {
-    // Implement export functionality
-    console.log(`Exporting in ${format} format...`);
+  const handleExport = async (format: 'pdf' | 'csv' | 'json') => {
+    try {
+      if (!scanDetails) return;
+
+      switch (format) {
+        case 'pdf':
+          exportToPDF(scanDetails.results, scanDetails.cveDetails);
+          break;
+        case 'csv':
+          exportToCSV(scanDetails.results, scanDetails.cveDetails);
+          break;
+        case 'json':
+          exportToJSON(scanDetails.results, scanDetails.cveDetails);
+          break;
+      }
+
+      toast({
+        title: 'Export Successful',
+        description: `Results exported in ${format.toUpperCase()} format`,
+        variant: 'success',
+      });
+    } catch (error) {
+      toast({
+        title: 'Export Failed',
+        description: 'Failed to export results. Please try again.',
+        variant: 'error',
+      });
+    }
   };
 
   if (isLoading) {
