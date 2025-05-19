@@ -1,3 +1,5 @@
+import { delay } from '../lib/utils';
+
 interface GeoIPResponse {
   status: string;
   country: string;
@@ -17,11 +19,27 @@ interface GeoIPResponse {
 
 export async function getIpLocation(ip: string): Promise<GeoIPResponse> {
   try {
-    const response = await fetch(`http://ip-api.com/json/${ip}`);
+    // Handle offline mode
+    if (!navigator.onLine) {
+      const cachedData = localStorage.getItem(`geoip-${ip}`);
+      if (cachedData) {
+        return JSON.parse(cachedData);
+      }
+      throw new Error('Offline - No cached data available');
+    }
+
+    const response = await fetch(`http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,region,regionName,city,zip,lat,lon,timezone,isp,org,as,query`);
+    
     if (!response.ok) {
       throw new Error('Failed to fetch IP location');
     }
-    return await response.json();
+    
+    const data = await response.json();
+    
+    // Cache the data for offline use
+    localStorage.setItem(`geoip-${ip}`, JSON.stringify(data));
+    
+    return data;
   } catch (error) {
     console.error('Error fetching IP location:', error);
     throw error;
