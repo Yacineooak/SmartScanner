@@ -2,8 +2,10 @@ from flask import Flask, request, jsonify
 import nmap
 import json
 from concurrent.futures import ThreadPoolExecutor
+from flask_cors import CORS
 
 app = Flask(__name__)
+CORS(app)
 scanner = nmap.PortScanner()
 
 @app.route('/scan/<scan_type>', methods=['POST'])

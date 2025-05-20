@@ -12,6 +12,7 @@ import RegisterPage from './pages/RegisterPage';
 import { AuthProvider } from './context/AuthContext';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import ProfilePage from './pages/ProfilePage';
+import SettingsPage from './pages/SettingsPage';
 import NotFoundPage from './pages/NotFoundPage';
 
 function App() {
@@ -54,6 +55,7 @@ function App() {
               <Route path="history" element={<ScanHistoryPage />} />
               <Route path="results/:scanId" element={<ScanResultsPage />} />
               <Route path="profile" element={<ProfilePage />} />
+              <Route path="settings" element={<SettingsPage />} />
             </Route>
             <Route path="*" element={<NotFoundPage />} />
           </Routes>

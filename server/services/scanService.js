@@ -1,115 +1,116 @@
 import net from 'net';
 import { promisify } from 'util';
 import { exec } from 'child_process';
+import axios from 'axios';
 import { searchVulnerabilities } from './nvdService.js';
+import { generateAiInsights } from './aiService.js';
+import Scan from '../models/Scan.js';
 
 const execAsync = promisify(exec);
+const PYTHON_SCAN_SERVICE = 'http://localhost:5001';
 
-export const scanPort = async (host, port) => {
-  return new Promise((resolve) => {
-    const socket = new net.Socket();
-    const timeout = 1000;
-    
-    socket.setTimeout(timeout);
-    
-    socket.on('connect', () => {
-      let service = getCommonService(port);
-      socket.write('HEAD / HTTP/1.0\r\n\r\n');
-      
-      socket.once('data', (data) => {
-        const banner = data.toString().split('\n')[0];
-        socket.destroy();
-        resolve({
-          port,
-          status: 'open',
-          service,
-          banner
-        });
-      });
-      
-      setTimeout(() => {
-        socket.destroy();
-        resolve({
-          port,
-          status: 'open',
-          service: getCommonService(port)
-        });
-      }, 200);
+export const startScan = async (userId, scanType, target, portRange) => {
+  try {
+    // Create scan record
+    const scan = await Scan.create({
+      userId,
+      scanType,
+      target,
+      portRange,
+      status: 'in-progress',
+      startTime: new Date()
     });
-    
-    socket.on('timeout', () => {
-      socket.destroy();
-      resolve({
-        port,
-        status: 'filtered'
-      });
-    });
-    
-    socket.on('error', () => {
-      socket.destroy();
-      resolve({
-        port,
-        status: 'closed'
-      });
-    });
-    
-    socket.connect(port, host);
-  });
-};
 
-const getCommonService = (port) => {
-  const services = {
-    20: 'FTP-data',
-    21: 'FTP',
-    22: 'SSH',
-    23: 'Telnet',
-    25: 'SMTP',
-    53: 'DNS',
-    80: 'HTTP',
-    110: 'POP3',
-    143: 'IMAP',
-    443: 'HTTPS',
-    3306: 'MySQL',
-    5432: 'PostgreSQL',
-    8080: 'HTTP-Proxy'
-  };
-  return services[port] || `port-${port}`;
-};
+    // Start scan process asynchronously
+    processScan(scan);
 
-export const scanTarget = async (target, portRange) => {
-  const results = [];
-  const [startPort, endPort] = portRange.split('-').map(Number);
-  
-  for (let port = startPort; port <= endPort; port++) {
-    const result = await scanPort(target, port);
-    if (result.status !== 'closed') {
-      results.push(result);
-    }
+    return scan;
+  } catch (error) {
+    console.error('Error starting scan:', error);
+    throw error;
   }
-  
-  // Fetch vulnerabilities for detected services
-  for (const result of results) {
-    if (result.service) {
-      try {
-        const cpe = `cpe:2.3:a:*:${result.service.toLowerCase()}:*:*:*:*:*:*:*:*`;
-        const vulns = await searchVulnerabilities(cpe);
-        result.vulnerabilities = vulns;
-      } catch (error) {
-        console.error(`Failed to fetch vulnerabilities for ${result.service}:`, error);
+};
+
+const processScan = async (scan) => {
+  try {
+    // Call Python scan service
+    const response = await axios.post(`${PYTHON_SCAN_SERVICE}/scan/${scan.scanType}`, {
+      target: scan.target,
+      portRange: scan.portRange
+    });
+
+    const results = response.data;
+
+    // Enrich with vulnerabilities
+    const vulnerabilities = {};
+    for (const result of results) {
+      if (result.service) {
+        const vulns = await searchVulnerabilities(result.service);
+        if (vulns.length > 0) {
+          vulnerabilities[result.port] = vulns;
+        }
       }
     }
+
+    // Generate AI insights
+    const insights = await generateAiInsights(results, vulnerabilities);
+
+    // Update scan record
+    await scan.update({
+      status: 'completed',
+      results,
+      vulnerabilities,
+      insights,
+      endTime: new Date()
+    });
+  } catch (error) {
+    console.error(`Error processing scan ${scan.id}:`, error);
+    await scan.update({
+      status: 'failed',
+      endTime: new Date()
+    });
   }
-  
-  return results;
 };
 
-export const detectOS = async (target) => {
-  try {
-    const { stdout } = await execAsync(`nmap -O ${target}`);
-    const osMatch = stdout.match(/OS details: (.+)/);
-    return osMatch ? osMatch[1] : 'Unknown';
-  } catch (error) {
-    console.error('OS detection failed:', error);
-    return 'Detection failed';
+export const getScanStatus = async (scanId) => {
+  const scan = await Scan.findByPk(scanId);
+  if (!scan) {
+    throw new Error('Scan not found');
   }
+  return {
+    id: scan.id,
+    status: scan.status,
+    progress: calculateProgress(scan),
+    startTime: scan.startTime,
+    endTime: scan.endTime
+  };
+};
+
+const calculateProgress = (scan) => {
+  if (scan.status === 'completed') return 100;
+  if (scan.status === 'failed') return 0;
+  
+  const now = new Date();
+  const start = new Date(scan.startTime);
+  const elapsed = now - start;
+  
+  // Estimate progress based on typical scan duration
+  const estimatedDuration = 300000; // 5 minutes
+  return Math.min(95, Math.floor((elapsed / estimatedDuration) * 100));
+};
+
+export const getScanResults = async (scanId) => {
+  const scan = await Scan.findByPk(scanId);
+  if (!scan) {
+    throw new Error('Scan not found');
+  }
+  return scan;
+};
+
+export const getScanHistory = async (userId) => {
+  return await Scan.findAll({
+    where: { userId },
+    order: [['startTime', 'DESC']],
+    limit: 10
+  });
 };
