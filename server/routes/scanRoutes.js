@@ -4,7 +4,8 @@ import {
   startScan,
   getScanStatus,
   getScanResults,
-  getScanHistory
+  getScanHistory,
+  exportScan
 } from '../controllers/scanController.js';
 
 const router = express.Router();
@@ -15,5 +16,6 @@ router.post('/:scanType', startScan);
 router.get('/status/:scanId', getScanStatus);
 router.get('/results/:scanId', getScanResults);
 router.get('/history', getScanHistory);
+router.get('/export/:scanId', exportScan);
 
 export default router;

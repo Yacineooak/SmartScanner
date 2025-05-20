@@ -1,6 +1,9 @@
 import Scan from '../models/Scan.js';
 import { scanTarget, detectOS } from '../services/scanService.js';
 import { searchVulnerabilities } from '../services/nvdService.js';
+import { getIpLocation, getCachedLocation, cacheLocation } from '../services/geoipService.js';
+import { generatePDF, generateCSV, generateJSON, streamFile } from '../services/exportService.js';
+import { sendCriticalAlert } from '../services/notificationService.js';
 
 export const startScan = async (req, res) => {
   try {
@@ -117,5 +120,50 @@ export const getScanHistory = async (req, res) => {
     res.json(scans);
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+};
+
+export const exportScan = async (req, res) => {
+  try {
+    const { scanId } = req.params;
+    const { format = 'pdf' } = req.query;
+    
+    const scan = await Scan.findByPk(scanId);
+    if (!scan) {
+      return res.status(404).json({ error: 'Scan not found' });
+    }
+
+    if (scan.userId !== req.user.id) {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+
+    let data;
+    let filename;
+    let contentType;
+
+    switch (format.toLowerCase()) {
+      case 'pdf':
+        data = await generatePDF(scan);
+        filename = `scan-${scanId}.pdf`;
+        contentType = 'application/pdf';
+        break;
+      case 'csv':
+        data = await generateCSV(scan);
+        filename = `scan-${scanId}.csv`;
+        contentType = 'text/csv';
+        break;
+      case 'json':
+        data = await generateJSON(scan);
+        filename = `scan-${scanId}.json`;
+        contentType = 'application/json';
+        break;
+      default:
+        return res.status(400).json({ error: 'Invalid format' });
+    }
+
+    streamFile(res, data, filename, contentType);
+  } catch (error) {
+    console.error('Export error:', error);
+    res.status(500).json({ error: 'Export failed' });
   }
 };
