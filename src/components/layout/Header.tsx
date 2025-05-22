@@ -3,6 +3,7 @@ import { useTheme } from '../../context/ThemeContext';
 import { Button } from '../ui/button';
 import { useAuth } from '../../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import { useToast } from '../../hooks/useToast';
 
 interface HeaderProps {
   sidebarOpen: boolean;
@@ -13,6 +14,15 @@ const Header = ({ sidebarOpen, setSidebarOpen }: HeaderProps) => {
   const { theme, setTheme } = useTheme();
   const { user } = useAuth();
   const navigate = useNavigate();
+  const { toast } = useToast();
+
+  const handleNotificationClick = () => {
+    toast({
+      title: "Notifications",
+      description: "No new notifications at this time.",
+      variant: "default",
+    });
+  };
 
   return (
     <header className="sticky top-0 z-10 bg-background/80 backdrop-blur-sm border-b border-border/40 px-4 shadow-sm">
@@ -41,7 +51,11 @@ const Header = ({ sidebarOpen, setSidebarOpen }: HeaderProps) => {
             )}
           </Button>
 
-          <Button variant="ghost" size="icon">
+          <Button 
+            variant="ghost" 
+            size="icon"
+            onClick={handleNotificationClick}
+          >
             <Bell className="h-5 w-5" />
           </Button>
 

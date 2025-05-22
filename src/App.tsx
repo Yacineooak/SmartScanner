@@ -19,7 +19,6 @@ function App() {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    // Simulate initial loading
     const timer = setTimeout(() => {
       setIsLoading(false);
     }, 1000);
@@ -49,7 +48,7 @@ function App() {
           <Routes>
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterPage />} />
-            <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
+            <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
               <Route index element={<Dashboard />} />
               <Route path="scan/:scanType" element={<ScanPage />} />
               <Route path="history" element={<ScanHistoryPage />} />
